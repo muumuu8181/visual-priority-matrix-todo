@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D〜8D 多次元ビジュアライザー</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            z-index: 100;
+            font-size: 16px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5);
+        }
+        
+        #canvas {
+            display: block;
+            cursor: pointer;
+        }
+        
+        .glow {
+            filter: drop-shadow(0 0 20px rgba(255,255,255,0.3));
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="info">
+            <div id="dimension">次元: 3D</div>
+            <div>ダブルクリック: 次元切替 | マウス移動: 視点操作</div>
+            <div>キー操作: スペース=速度変更 | R=リセット | WASD=カメラ</div>
+        </div>
+        <canvas id="canvas" class="glow"></canvas>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        class MultidimensionalVisualizer {
+            constructor() {
+                this.currentDimension = 3;
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('canvas'), antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setClearColor(0x000000);
+                
+                this.objects = [];
+                this.time = 0;
+                this.animationSpeed = 0.02;
+                this.mouseX = 0;
+                this.mouseY = 0;
+                this.isDragging = false;
+                this.cameraOffset = { x: 0, y: 0, z: 5 };
+                this.speedMultiplier = 1;
+                this.wavePhase = 0;
+                
+                this.init();
+                this.setupEventListeners();
+                this.animate();
+            }
+            
+            init() {
+                this.camera.position.z = 5;
+                this.create3DScene();
+            }
+            
+            create3DScene() {
+                this.clearScene();
+                
+                // 3D基本図形群
+                const geometries = [
+                    new THREE.BoxGeometry(1, 1, 1),
+                    new THREE.SphereGeometry(0.5, 32, 32),
+                    new THREE.ConeGeometry(0.5, 1, 8),
+                    new THREE.TorusGeometry(0.5, 0.2, 16, 100),
+                    new THREE.TetrahedronGeometry(0.6),
+                    new THREE.OctahedronGeometry(0.6),
+                    new THREE.IcosahedronGeometry(0.6),
+                    new THREE.DodecahedronGeometry(0.6)
+                ];
+                
+                for (let i = 0; i < 8; i++) {
+                    const material = new THREE.MeshPhongMaterial({
+                        color: new THREE.Color().setHSL(i / 8, 0.8, 0.6),
+                        shininess: 100,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                    
+                    const mesh = new THREE.Mesh(geometries[i], material);
+                    const angle = (i / 8) * Math.PI * 2;
+                    mesh.position.set(Math.cos(angle) * 2, Math.sin(angle) * 2, 0);
+                    mesh.userData = { originalPosition: mesh.position.clone(), index: i };
+                    
+                    this.objects.push(mesh);
+                    this.scene.add(mesh);
+                }
+                
+                // ライティング
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(5, 5, 5);
+                this.scene.add(directionalLight);
+                
+                document.getElementById('dimension').textContent = '次元: 3D';
+            }
+            
+            create4DScene() {
+                this.clearScene();
+                
+                // 4D超立方体（テッセラクト）の投影
+                const tesseractVertices = this.generateTesseractVertices();
+                const tesseractEdges = this.generateTesseractEdges();
+                
+                // 頂点を表示
+                tesseractVertices.forEach((vertex, i) => {
+                    const geometry = new THREE.SphereGeometry(0.05, 16, 16);
+                    const material = new THREE.MeshPhongMaterial({
+                        color: new THREE.Color().setHSL(i / tesseractVertices.length, 1, 0.7),
+                        emissive: new THREE.Color().setHSL(i / tesseractVertices.length, 0.5, 0.2)
+                    });
+                    const sphere = new THREE.Mesh(geometry, material);
+                    sphere.position.copy(vertex);
+                    sphere.userData = { originalPosition: vertex.clone(), index: i, type: 'vertex' };
+                    this.objects.push(sphere);
+                    this.scene.add(sphere);
+                });
+                
+                // エッジを表示
+                tesseractEdges.forEach((edge, i) => {
+                    const geometry = new THREE.BufferGeometry().setFromPoints([
+                        tesseractVertices[edge[0]],
+                        tesseractVertices[edge[1]]
+                    ]);
+                    const material = new THREE.LineBasicMaterial({
+                        color: new THREE.Color().setHSL((i * 0.1) % 1, 0.8, 0.8),
+                        transparent: true,
+                        opacity: 0.7
+                    });
+                    const line = new THREE.Line(geometry, material);
+                    line.userData = { type: 'edge', index: i };
+                    this.objects.push(line);
+                    this.scene.add(line);
+                });
+                
+                // ライティング
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(5, 5, 5);
+                this.scene.add(directionalLight);
+                
+                document.getElementById('dimension').textContent = '次元: 4D (テッセラクト)';
+            }
+            
+            create5DScene() {
+                this.clearScene();
+                
+                // 5D超立方体（ペンテラクト）の3D投影
+                for (let layer = 0; layer < 5; layer++) {
+                    for (let i = 0; i < 16; i++) {
+                        const geometry = new THREE.BoxGeometry(0.1, 0.1, 0.1);
+                        const material = new THREE.MeshPhongMaterial({
+                            color: new THREE.Color().setHSL((layer * 0.2 + i * 0.02) % 1, 0.9, 0.6),
+                            transparent: true,
+                            opacity: 0.7 - layer * 0.1,
+                            emissive: new THREE.Color().setHSL((layer * 0.2 + i * 0.02) % 1, 0.3, 0.1)
+                        });
+                        
+                        const mesh = new THREE.Mesh(geometry, material);
+                        const radius = 1.5 + layer * 0.5;
+                        const angle = (i / 16) * Math.PI * 2;
+                        const height = (layer - 2) * 0.8;
+                        
+                        mesh.position.set(
+                            Math.cos(angle) * radius,
+                            height,
+                            Math.sin(angle) * radius
+                        );
+                        
+                        mesh.userData = {
+                            originalPosition: mesh.position.clone(),
+                            layer: layer,
+                            index: i,
+                            radius: radius,
+                            angle: angle,
+                            type: '5d_element'
+                        };
+                        
+                        this.objects.push(mesh);
+                        this.scene.add(mesh);
+                    }
+                }
+                
+                // 中心に核となる構造
+                const coreGeometry = new THREE.IcosahedronGeometry(0.3, 2);
+                const coreMaterial = new THREE.MeshPhongMaterial({
+                    color: 0xffffff,
+                    transparent: true,
+                    opacity: 0.9,
+                    emissive: 0x444444
+                });
+                const core = new THREE.Mesh(coreGeometry, coreMaterial);
+                core.userData = { type: 'core' };
+                this.objects.push(core);
+                this.scene.add(core);
+                
+                // 粒子システム
+                this.createParticleSystem(200);
+                
+                // ライティング
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.8);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+                directionalLight.position.set(5, 5, 5);
+                this.scene.add(directionalLight);
+                
+                document.getElementById('dimension').textContent = '次元: 5D (ペンテラクト投影)';
+            }
+            
+            create6DScene() {
+                this.clearScene();
+                
+                // 6D構造：多層螺旋トーラス
+                for (let spiral = 0; spiral < 6; spiral++) {
+                    for (let i = 0; i < 24; i++) {
+                        const geometry = new THREE.TetrahedronGeometry(0.08);
+                        const material = new THREE.MeshPhongMaterial({
+                            color: new THREE.Color().setHSL((spiral * 0.16 + i * 0.01) % 1, 1, 0.7),
+                            transparent: true,
+                            opacity: 0.8,
+                            emissive: new THREE.Color().setHSL((spiral * 0.16 + i * 0.01) % 1, 0.4, 0.2)
+                        });
+                        
+                        const mesh = new THREE.Mesh(geometry, material);
+                        const t = i / 24 * Math.PI * 4;
+                        const majorRadius = 2 + Math.sin(spiral * 0.5) * 0.5;
+                        const minorRadius = 0.3 + spiral * 0.1;
+                        
+                        mesh.position.set(
+                            (majorRadius + minorRadius * Math.cos(t * 3)) * Math.cos(t),
+                            Math.sin(t * 2) * (1 + spiral * 0.2),
+                            (majorRadius + minorRadius * Math.cos(t * 3)) * Math.sin(t)
+                        );
+                        
+                        mesh.userData = {
+                            spiral: spiral,
+                            index: i,
+                            t: t,
+                            majorRadius: majorRadius,
+                            minorRadius: minorRadius,
+                            type: '6d_spiral'
+                        };
+                        
+                        this.objects.push(mesh);
+                        this.scene.add(mesh);
+                    }
+                }
+                
+                this.createParticleSystem(300);
+                this.setupLighting();
+                document.getElementById('dimension').textContent = '次元: 6D (螺旋トーラス)';
+            }
+            
+            create7DScene() {
+                this.clearScene();
+                
+                // 7D構造：フラクタル立方体群
+                this.createFractalCubes(0, 0, 0, 1.5, 0, 7);
+                
+                // 環状波動構造
+                for (let ring = 0; ring < 7; ring++) {
+                    for (let i = 0; i < 20; i++) {
+                        const geometry = new THREE.OctahedronGeometry(0.06 + ring * 0.01);
+                        const material = new THREE.MeshPhongMaterial({
+                            color: new THREE.Color().setHSL((ring * 0.14 + i * 0.005) % 1, 0.9, 0.8),
+                            transparent: true,
+                            opacity: 0.7,
+                            wireframe: ring % 2 === 0
+                        });
+                        
+                        const mesh = new THREE.Mesh(geometry, material);
+                        const angle = (i / 20) * Math.PI * 2;
+                        const radius = 1 + ring * 0.4;
+                        
+                        mesh.position.set(
+                            Math.cos(angle) * radius,
+                            (ring - 3) * 0.3,
+                            Math.sin(angle) * radius
+                        );
+                        
+                        mesh.userData = {
+                            ring: ring,
+                            index: i,
+                            angle: angle,
+                            radius: radius,
+                            type: '7d_ring'
+                        };
+                        
+                        this.objects.push(mesh);
+                        this.scene.add(mesh);
+                    }
+                }
+                
+                this.createParticleSystem(400);
+                this.setupLighting();
+                document.getElementById('dimension').textContent = '次元: 7D (フラクタル構造)';
+            }
+            
+            create8DScene() {
+                this.clearScene();
+                
+                // 8D構造：量子場の視覚化
+                for (let field = 0; field < 8; field++) {
+                    for (let x = -2; x <= 2; x++) {
+                        for (let z = -2; z <= 2; z++) {
+                            if (Math.random() > 0.3) continue;
+                            
+                            const geometry = new THREE.IcosahedronGeometry(0.05 + Math.random() * 0.03);
+                            const material = new THREE.MeshPhongMaterial({
+                                color: new THREE.Color().setHSL((field * 0.125 + Math.random() * 0.1) % 1, 1, 0.9),
+                                transparent: true,
+                                opacity: 0.6 + Math.random() * 0.3,
+                                emissive: new THREE.Color().setHSL((field * 0.125) % 1, 0.3, 0.1)
+                            });
+                            
+                            const mesh = new THREE.Mesh(geometry, material);
+                            mesh.position.set(
+                                x * 0.8 + (Math.random() - 0.5) * 0.3,
+                                (field - 3.5) * 0.5 + Math.sin(x + z) * 0.2,
+                                z * 0.8 + (Math.random() - 0.5) * 0.3
+                            );
+                            
+                            mesh.userData = {
+                                field: field,
+                                gridX: x,
+                                gridZ: z,
+                                originalPosition: mesh.position.clone(),
+                                phase: Math.random() * Math.PI * 2,
+                                type: '8d_quantum'
+                            };
+                            
+                            this.objects.push(mesh);
+                            this.scene.add(mesh);
+                        }
+                    }
+                }
+                
+                // エネルギー流動線
+                this.createEnergyLines();
+                this.createParticleSystem(500);
+                this.setupLighting();
+                document.getElementById('dimension').textContent = '次元: 8D (量子場)';
+            }
+            
+            createParticleSystem(count = 200) {
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(count * 3);
+                const colors = new Float32Array(count * 3);
+                const velocities = new Float32Array(count * 3);
+                
+                for (let i = 0; i < count; i++) {
+                    positions[i * 3] = (Math.random() - 0.5) * 12;
+                    positions[i * 3 + 1] = (Math.random() - 0.5) * 12;
+                    positions[i * 3 + 2] = (Math.random() - 0.5) * 12;
+                    
+                    velocities[i * 3] = (Math.random() - 0.5) * 0.02;
+                    velocities[i * 3 + 1] = (Math.random() - 0.5) * 0.02;
+                    velocities[i * 3 + 2] = (Math.random() - 0.5) * 0.02;
+                    
+                    const color = new THREE.Color().setHSL(Math.random(), 0.8, 0.7);
+                    colors[i * 3] = color.r;
+                    colors[i * 3 + 1] = color.g;
+                    colors[i * 3 + 2] = color.b;
+                }
+                
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+                
+                const material = new THREE.PointsMaterial({
+                    size: 0.06,
+                    vertexColors: true,
+                    transparent: true,
+                    opacity: 0.9,
+                    blending: THREE.AdditiveBlending
+                });
+                
+                const particles = new THREE.Points(geometry, material);
+                particles.userData = { type: 'particles', velocities: velocities };
+                this.objects.push(particles);
+                this.scene.add(particles);
+            }
+            
+            createFractalCubes(x, y, z, size, depth, maxDepth) {
+                if (depth >= maxDepth || size < 0.05) return;
+                
+                const geometry = new THREE.BoxGeometry(size, size, size);
+                const material = new THREE.MeshPhongMaterial({
+                    color: new THREE.Color().setHSL((depth / maxDepth + this.time * 0.1) % 1, 0.8, 0.6),
+                    transparent: true,
+                    opacity: 0.7 - depth * 0.1,
+                    wireframe: depth % 2 === 1
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(x, y, z);
+                mesh.userData = { type: 'fractal', depth: depth, size: size };
+                this.objects.push(mesh);
+                this.scene.add(mesh);
+                
+                if (Math.random() > 0.6) {
+                    const newSize = size * 0.6;
+                    const offset = size * 0.8;
+                    const positions = [
+                        [x + offset, y, z], [x - offset, y, z],
+                        [x, y + offset, z], [x, y - offset, z],
+                        [x, y, z + offset], [x, y, z - offset]
+                    ];
+                    
+                    positions.forEach(pos => {
+                        if (Math.random() > 0.4) {
+                            this.createFractalCubes(pos[0], pos[1], pos[2], newSize, depth + 1, maxDepth);
+                        }
+                    });
+                }
+            }
+            
+            createEnergyLines() {
+                for (let i = 0; i < 20; i++) {
+                    const points = [];
+                    for (let j = 0; j < 50; j++) {
+                        const t = j / 49;
+                        const angle = t * Math.PI * 4 + i * 0.3;
+                        const radius = 3 + Math.sin(t * Math.PI * 2) * 0.5;
+                        points.push(new THREE.Vector3(
+                            Math.cos(angle) * radius,
+                            (t - 0.5) * 6,
+                            Math.sin(angle) * radius
+                        ));
+                    }
+                    
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    const material = new THREE.LineBasicMaterial({
+                        color: new THREE.Color().setHSL((i * 0.05) % 1, 1, 0.8),
+                        transparent: true,
+                        opacity: 0.6
+                    });
+                    
+                    const line = new THREE.Line(geometry, material);
+                    line.userData = { type: 'energy_line', index: i };
+                    this.objects.push(line);
+                    this.scene.add(line);
+                }
+            }
+            
+            setupLighting() {
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(5, 5, 5);
+                this.scene.add(directionalLight);
+                
+                const pointLight = new THREE.PointLight(0xff4444, 0.5, 10);
+                pointLight.position.set(-3, 2, -3);
+                this.scene.add(pointLight);
+                
+                const pointLight2 = new THREE.PointLight(0x4444ff, 0.5, 10);
+                pointLight2.position.set(3, -2, 3);
+                this.scene.add(pointLight2);
+            }
+            
+            generateTesseractVertices() {
+                const vertices = [];
+                for (let i = 0; i < 16; i++) {
+                    const x = (i & 1) ? 1 : -1;
+                    const y = (i & 2) ? 1 : -1;
+                    const z = (i & 4) ? 1 : -1;
+                    const w = (i & 8) ? 1 : -1;
+                    
+                    // 4D->3D投影
+                    const scale = 0.8;
+                    const perspective = 1 / (2 - w * 0.5);
+                    vertices.push(new THREE.Vector3(
+                        x * scale * perspective,
+                        y * scale * perspective,
+                        z * scale * perspective
+                    ));
+                }
+                return vertices;
+            }
+            
+            generateTesseractEdges() {
+                const edges = [];
+                for (let i = 0; i < 16; i++) {
+                    for (let j = i + 1; j < 16; j++) {
+                        const diff = i ^ j;
+                        if ((diff & (diff - 1)) === 0) {
+                            edges.push([i, j]);
+                        }
+                    }
+                }
+                return edges;
+            }
+            
+            
+            clearScene() {
+                this.objects.forEach(obj => {
+                    this.scene.remove(obj);
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) obj.material.dispose();
+                });
+                this.objects = [];
+                
+                // ライトも削除
+                const lights = this.scene.children.filter(child => child.isLight);
+                lights.forEach(light => this.scene.remove(light));
+            }
+            
+            switchDimension() {
+                this.currentDimension++;
+                if (this.currentDimension > 8) this.currentDimension = 3;
+                
+                switch (this.currentDimension) {
+                    case 3:
+                        this.create3DScene();
+                        break;
+                    case 4:
+                        this.create4DScene();
+                        break;
+                    case 5:
+                        this.create5DScene();
+                        break;
+                    case 6:
+                        this.create6DScene();
+                        break;
+                    case 7:
+                        this.create7DScene();
+                        break;
+                    case 8:
+                        this.create8DScene();
+                        break;
+                }
+            }
+            
+            setupEventListeners() {
+                let clickCount = 0;
+                let clickTimer = null;
+                
+                // ダブルクリックで次元切り替え
+                this.renderer.domElement.addEventListener('click', () => {
+                    clickCount++;
+                    if (clickCount === 1) {
+                        clickTimer = setTimeout(() => {
+                            clickCount = 0;
+                        }, 300);
+                    } else if (clickCount === 2) {
+                        clearTimeout(clickTimer);
+                        clickCount = 0;
+                        this.switchDimension();
+                    }
+                });
+                
+                // マウス移動でカメラ制御
+                this.renderer.domElement.addEventListener('mousemove', (e) => {
+                    this.mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+                    this.mouseY = -(e.clientY / window.innerHeight) * 2 + 1;
+                });
+                
+                // ドラッグ操作
+                this.renderer.domElement.addEventListener('mousedown', () => {
+                    this.isDragging = true;
+                });
+                
+                this.renderer.domElement.addEventListener('mouseup', () => {
+                    this.isDragging = false;
+                });
+                
+                this.renderer.domElement.addEventListener('mouseleave', () => {
+                    this.isDragging = false;
+                });
+                
+                // キーボード操作
+                window.addEventListener('keydown', (e) => {
+                    switch(e.code) {
+                        case 'Space':
+                            e.preventDefault();
+                            this.speedMultiplier = this.speedMultiplier === 1 ? 3 : 1;
+                            break;
+                        case 'KeyR':
+                            this.time = 0;
+                            this.wavePhase = 0;
+                            this.cameraOffset = { x: 0, y: 0, z: 5 };
+                            break;
+                        case 'KeyW':
+                            this.cameraOffset.z -= 0.5;
+                            break;
+                        case 'KeyS':
+                            this.cameraOffset.z += 0.5;
+                            break;
+                        case 'KeyA':
+                            this.cameraOffset.x -= 0.5;
+                            break;
+                        case 'KeyD':
+                            this.cameraOffset.x += 0.5;
+                            break;
+                    }
+                });
+                
+                // リサイズ
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                this.time += this.animationSpeed * this.speedMultiplier;
+                this.wavePhase += 0.05 * this.speedMultiplier;
+                
+                this.objects.forEach((obj, index) => {
+                    const speed = this.speedMultiplier;
+                    
+                    if (obj.userData.type === 'vertex' || obj.userData.type === 'edge') {
+                        // 4D回転アニメーション
+                        const rotationSpeed = 0.01 * speed;
+                        obj.rotation.x += rotationSpeed;
+                        obj.rotation.y += rotationSpeed * 0.7;
+                        obj.rotation.z += rotationSpeed * 0.3;
+                    } else if (obj.userData.type === 'core') {
+                        // コア回転
+                        obj.rotation.x += 0.02 * speed;
+                        obj.rotation.y += 0.015 * speed;
+                        obj.rotation.z += 0.01 * speed;
+                        
+                        // パルシング効果
+                        const pulse = 1 + Math.sin(this.time * 4) * 0.2;
+                        obj.scale.setScalar(pulse);
+                    } else if (obj.userData.type === 'particles') {
+                        // パーティクルの動的アニメーション
+                        obj.rotation.y += 0.005 * speed;
+                        const positions = obj.geometry.attributes.position.array;
+                        const velocities = obj.userData.velocities;
+                        
+                        for (let i = 0; i < positions.length; i += 3) {
+                            positions[i] += velocities[i] * speed;
+                            positions[i + 1] += velocities[i + 1] * speed;
+                            positions[i + 2] += velocities[i + 2] * speed;
+                            
+                            // 境界でリセット
+                            if (Math.abs(positions[i]) > 6) velocities[i] *= -1;
+                            if (Math.abs(positions[i + 1]) > 6) velocities[i + 1] *= -1;
+                            if (Math.abs(positions[i + 2]) > 6) velocities[i + 2] *= -1;
+                        }
+                        obj.geometry.attributes.position.needsUpdate = true;
+                        
+                    } else if (obj.userData.type === '5d_element') {
+                        // 5D構造のアニメーション
+                        const layer = obj.userData.layer;
+                        const baseAngle = obj.userData.angle;
+                        const radius = obj.userData.radius;
+                        
+                        const currentAngle = baseAngle + this.time * (0.5 + layer * 0.2);
+                        const heightOscillation = Math.sin(this.time * 2 + layer) * 0.3;
+                        const wave = Math.sin(this.wavePhase + layer + obj.userData.index * 0.1) * 0.2;
+                        
+                        obj.position.x = Math.cos(currentAngle) * (radius + wave);
+                        obj.position.z = Math.sin(currentAngle) * (radius + wave);
+                        obj.position.y = (layer - 2) * 0.8 + heightOscillation;
+                        
+                        obj.rotation.x += 0.01 * (layer + 1) * speed;
+                        obj.rotation.y += 0.015 * (layer + 1) * speed;
+                        obj.rotation.z += 0.008 * (layer + 1) * speed;
+                        
+                        // 色の変化
+                        const hue = (this.time * 0.1 + layer * 0.2 + index * 0.02) % 1;
+                        obj.material.color.setHSL(hue, 0.9, 0.6);
+                        obj.material.emissive.setHSL(hue, 0.3, 0.1);
+                        
+                    } else if (obj.userData.type === '6d_spiral') {
+                        // 6D螺旋アニメーション
+                        const spiral = obj.userData.spiral;
+                        const t = obj.userData.t + this.time * 0.5;
+                        const majorRadius = obj.userData.majorRadius;
+                        const minorRadius = obj.userData.minorRadius;
+                        
+                        obj.position.set(
+                            (majorRadius + minorRadius * Math.cos(t * 3)) * Math.cos(t),
+                            Math.sin(t * 2) * (1 + spiral * 0.2) + Math.sin(this.wavePhase + spiral) * 0.5,
+                            (majorRadius + minorRadius * Math.cos(t * 3)) * Math.sin(t)
+                        );
+                        
+                        obj.rotation.x += 0.02 * speed;
+                        obj.rotation.y += 0.01 * speed;
+                        obj.rotation.z += 0.015 * speed;
+                        
+                    } else if (obj.userData.type === '7d_ring') {
+                        // 7D環状構造
+                        const ring = obj.userData.ring;
+                        const angle = obj.userData.angle + this.time * (0.3 + ring * 0.1);
+                        const radius = obj.userData.radius + Math.sin(this.wavePhase + ring) * 0.3;
+                        
+                        obj.position.x = Math.cos(angle) * radius;
+                        obj.position.z = Math.sin(angle) * radius;
+                        obj.position.y = (ring - 3) * 0.3 + Math.sin(this.time * 3 + ring) * 0.2;
+                        
+                        obj.rotation.x += 0.03 * speed;
+                        obj.rotation.y += 0.02 * speed;
+                        obj.rotation.z += 0.01 * speed;
+                        
+                    } else if (obj.userData.type === '8d_quantum') {
+                        // 8D量子場アニメーション
+                        const field = obj.userData.field;
+                        const phase = obj.userData.phase + this.time * 2;
+                        const originalPos = obj.userData.originalPosition;
+                        
+                        const quantum = Math.sin(phase) * 0.3;
+                        const wave = Math.sin(this.wavePhase * 2 + field) * 0.2;
+                        
+                        obj.position.x = originalPos.x + quantum + wave;
+                        obj.position.y = originalPos.y + Math.cos(phase) * 0.2;
+                        obj.position.z = originalPos.z + Math.sin(phase * 0.7) * 0.3;
+                        
+                        obj.rotation.x += 0.04 * speed;
+                        obj.rotation.y += 0.03 * speed;
+                        obj.rotation.z += 0.02 * speed;
+                        
+                        // 透明度のパルシング
+                        obj.material.opacity = 0.3 + Math.sin(phase * 3) * 0.3;
+                        
+                    } else if (obj.userData.type === 'fractal') {
+                        // フラクタルアニメーション
+                        const depth = obj.userData.depth;
+                        const rotSpeed = 0.005 * (depth + 1) * speed;
+                        
+                        obj.rotation.x += rotSpeed;
+                        obj.rotation.y += rotSpeed * 1.2;
+                        obj.rotation.z += rotSpeed * 0.8;
+                        
+                        const pulse = 1 + Math.sin(this.time * 4 + depth) * 0.1;
+                        obj.scale.setScalar(pulse);
+                        
+                    } else if (obj.userData.type === 'energy_line') {
+                        // エネルギーラインの流動
+                        obj.rotation.y += 0.01 * speed;
+                        obj.material.opacity = 0.3 + Math.sin(this.time * 2 + obj.userData.index) * 0.3;
+                        
+                    } else {
+                        // 3D基本形状のアニメーション
+                        const originalPos = obj.userData.originalPosition;
+                        if (originalPos) {
+                            const oscillation = Math.sin(this.time * 2 + index) * 0.5;
+                            const rotation = this.time + index * 0.5;
+                            const wave = Math.sin(this.wavePhase + index * 0.2) * 0.3;
+                            
+                            obj.position.x = originalPos.x + Math.cos(rotation) * oscillation + wave;
+                            obj.position.y = originalPos.y + Math.sin(rotation) * oscillation;
+                            obj.position.z = originalPos.z + Math.sin(this.time + index) * 0.3;
+                            
+                            obj.rotation.x += 0.01 * speed;
+                            obj.rotation.y += 0.015 * speed;
+                            obj.rotation.z += 0.008 * speed;
+                            
+                            // 色の連続変化
+                            const hue = (this.time * 0.1 + index * 0.125) % 1;
+                            obj.material.color.setHSL(hue, 0.8, 0.6);
+                            
+                            // パルシング効果
+                            const pulse = 1 + Math.sin(this.time * 6 + index) * 0.1;
+                            obj.scale.setScalar(pulse);
+                        }
+                    }
+                });
+                
+                // マウスによるカメラ制御
+                const mouseInfluence = this.isDragging ? 2 : 0.5;
+                this.camera.position.x = this.cameraOffset.x + Math.sin(this.time * 0.3) * 0.3 + this.mouseX * mouseInfluence;
+                this.camera.position.y = this.cameraOffset.y + Math.cos(this.time * 0.2) * 0.2 + this.mouseY * mouseInfluence;
+                this.camera.position.z = this.cameraOffset.z + Math.sin(this.time * 0.1) * 0.1;
+                
+                this.camera.lookAt(
+                    this.mouseX * 0.5,
+                    this.mouseY * 0.5,
+                    0
+                );
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+        
+        // アプリケーション開始
+        window.addEventListener('DOMContentLoaded', () => {
+            new MultidimensionalVisualizer();
+        });
+    </script>
+</body>
+</html>
